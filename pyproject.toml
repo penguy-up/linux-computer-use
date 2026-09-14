@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepin-computer-use"
+version = "1.0.0"
+description = "Computer Use MCP Server tailored for Deepin OS V25 (Treeland Wayland compositor)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "penguy-up" }
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Desktop Environment",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "pillow>=9.0.0",
+    "evdev>=1.6.0",
+]
+
+[project.scripts]
+deepin-computer-use = "deepin_computer_use.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["deepin_computer_use*"]
