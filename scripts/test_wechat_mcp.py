@@ -12,7 +12,8 @@ import base64
 import subprocess
 from typing import Any, Dict, Optional
 
-SERVER_SCRIPT = "/home/kylin/Documents/github/linux-computer-use/scripts/run_server.sh"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "run_server.sh")
 ENV = {
     **os.environ,
     "WAYLAND_DISPLAY": "treeland.socket",

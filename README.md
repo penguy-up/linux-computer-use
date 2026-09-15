@@ -99,7 +99,7 @@ Add to your `claude_desktop_config.json`, Codex, or Antigravity MCP settings:
 {
   "mcpServers": {
     "deepin-computer-use": {
-      "command": "/home/kylin/Documents/github/linux-computer-use/scripts/run_server.sh",
+      "command": "/path/to/linux-computer-use/scripts/run_server.sh",
       "args": [],
       "env": {
         "WAYLAND_DISPLAY": "treeland.socket",

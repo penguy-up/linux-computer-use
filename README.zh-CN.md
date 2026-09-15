@@ -72,7 +72,7 @@ python3 -m deepin_computer_use --screenshot test.png
 {
   "mcpServers": {
     "deepin-computer-use": {
-      "command": "/home/kylin/Documents/github/linux-computer-use/scripts/run_server.sh",
+      "command": "/path/to/linux-computer-use/scripts/run_server.sh",
       "args": [],
       "env": {
         "WAYLAND_DISPLAY": "treeland.socket",

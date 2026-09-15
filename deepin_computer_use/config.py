@@ -31,7 +31,8 @@ def find_executable(name: str) -> str | None:
         return system_path
 
     # 3. Check common user / system directories
-    for fallback in [f"/usr/bin/{name}", f"/usr/local/bin/{name}", f"/home/kylin/.local/bin/{name}"]:
+    user_local_bin = str(Path.home() / ".local" / "bin" / name)
+    for fallback in [f"/usr/bin/{name}", f"/usr/local/bin/{name}", user_local_bin]:
         if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
             return fallback
 
