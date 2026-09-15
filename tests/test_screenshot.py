@@ -14,6 +14,15 @@ def test_get_screen_size():
     assert h > 0
 
 
+def test_get_screen_size_caching():
+    w1, h1 = get_screen_size()
+    w2, h2 = get_screen_size()
+    assert (w1, h1) == (w2, h2)
+    # Test force refresh
+    w3, h3 = get_screen_size(force_refresh=True)
+    assert (w3, h3) == (w1, h1)
+
+
 def test_capture_screenshot_dimensions_and_rescaling():
     res = capture_screenshot(max_width=800, max_height=600, output_format="png")
     assert res["width"] <= 800

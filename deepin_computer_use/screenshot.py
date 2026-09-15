@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -20,27 +21,54 @@ from .config import (
     GRIM_BIN,
     MAX_PAYLOAD_BYTES,
     WAYLAND_DISPLAY,
+    WLRCTL_BIN,
     XDG_RUNTIME_DIR,
 )
 
+# Global screen size cache to avoid expensive full-screen captures
+_screen_size_cache: Optional[Tuple[int, int]] = None
 
-def get_screen_size() -> Tuple[int, int]:
-    """Get logical or physical desktop dimensions using grim capture or probe."""
+
+def get_screen_size(force_refresh: bool = False) -> Tuple[int, int]:
+    """Get logical or physical desktop dimensions using cached resolution or fast probe."""
+    global _screen_size_cache
+    if _screen_size_cache is not None and not force_refresh:
+        return _screen_size_cache
+
+    env = dict(os.environ)
+    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+
+    # 1. Fast probe: wlrctl output list (0 disk I/O, sub-10ms)
+    wlrctl = WLRCTL_BIN or "wlrctl"
+    try:
+        res = subprocess.run([wlrctl, "output", "list"], env=env, capture_output=True, text=True, timeout=2)
+        if res.returncode == 0 and res.stdout:
+            for line in res.stdout.splitlines():
+                m = re.search(r"\((\d+)x(\d+)", line)
+                if m:
+                    _screen_size_cache = (int(m.group(1)), int(m.group(2)))
+                    return _screen_size_cache
+    except Exception:
+        pass
+
+    # 2. Probe using grim one-shot (only if cache is empty)
     try:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
             temp_path = tf.name
         cmd = [GRIM_BIN or "grim", temp_path]
-        env = dict(os.environ)
-        env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
-        env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-        subprocess.run(cmd, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4)
         with Image.open(temp_path) as img:
             w, h = img.size
         os.unlink(temp_path)
-        return w, h
+        _screen_size_cache = (w, h)
+        return _screen_size_cache
     except Exception:
-        # Fallback to standard 1080p
-        return 1920, 1080
+        pass
+
+    # 3. Fallback standard resolution
+    _screen_size_cache = (1920, 1080)
+    return _screen_size_cache
 
 
 def capture_screenshot_raw(
@@ -53,6 +81,7 @@ def capture_screenshot_raw(
     
     Returns: (image_bytes, mime_type, original_width, original_height)
     """
+    global _screen_size_cache
     env = dict(os.environ)
     env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
     env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
@@ -83,6 +112,8 @@ def capture_screenshot_raw(
                 w, h = img.size
             with open(temp_path, "rb") as f:
                 data = f.read()
+            if geometry is None:
+                _screen_size_cache = (w, h)
             return data, mime_type, w, h
     except Exception:
         pass
@@ -96,6 +127,8 @@ def capture_screenshot_raw(
                 w, h = img.size
             with open(temp_path, "rb") as f:
                 data = f.read()
+            if geometry is None:
+                _screen_size_cache = (w, h)
             return data, mime_type, w, h
     except Exception:
         pass

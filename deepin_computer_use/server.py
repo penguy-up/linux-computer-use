@@ -25,6 +25,7 @@ from .input import (
     mouse_scroll,
     mouse_up,
     press_key,
+    release_all_buttons,
     type_text,
 )
 from .screenshot import capture_screenshot, get_screen_size
@@ -208,6 +209,14 @@ TOOLS_DEFINITIONS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "release_all_buttons",
+        "description": "Emergency release for any mouse buttons currently held down (prevents mouse button stuck during drag or interruption).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
         "name": "mouse_drag",
         "description": "Click, drag from (start_x, start_y) to (end_x, end_y), and release.",
         "inputSchema": {
@@ -268,6 +277,11 @@ TOOLS_DEFINITIONS: List[Dict[str, Any]] = [
                 "delay_ms": {
                     "type": "integer",
                     "description": "Inter-character delay in milliseconds (default: 10).",
+                },
+                "method": {
+                    "type": "string",
+                    "enum": ["auto", "type", "clipboard"],
+                    "description": "Typing method: 'auto' (default, switches to clipboard paste for Chinese/Unicode, newlines, or text > 15 chars), 'type' (keystroke emulation only), or 'clipboard' (Wayland clipboard paste via Ctrl+V).",
                 },
             },
             "required": ["text"],
@@ -548,6 +562,14 @@ class MCPServer:
                 "isError": False,
             }
 
+        elif name == "release_all_buttons":
+            released = await asyncio.to_thread(release_all_buttons)
+            info = f"Released buttons: {released}" if released else "All mouse buttons were already released"
+            return {
+                "content": [{"type": "text", "text": info}],
+                "isError": False,
+            }
+
         elif name == "mouse_drag":
             sx = int(args["start_x"])
             sy = int(args["start_y"])
@@ -580,9 +602,10 @@ class MCPServer:
         elif name == "type_text":
             text = args["text"]
             delay = int(args.get("delay_ms", 10))
-            ok = await asyncio.to_thread(type_text, text, delay)
+            method = args.get("method", "auto")
+            ok = await asyncio.to_thread(type_text, text, delay, method)
             return {
-                "content": [{"type": "text", "text": f"Typed {len(text)} characters"}],
+                "content": [{"type": "text", "text": f"Typed {len(text)} characters (method: {method})"}],
                 "isError": False,
             }
 

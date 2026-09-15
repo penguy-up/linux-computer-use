@@ -9,6 +9,7 @@ from typing import List
 
 from ..config import (
     WAYLAND_DISPLAY,
+    WL_COPY_BIN,
     WLRCTL_BIN,
     WTYPE_BIN,
     XDOTOOL_BIN,
@@ -110,14 +111,98 @@ def parse_key_combo(combo_str: str) -> tuple[List[str], str]:
     return modifiers, key
 
 
-def type_text(text: str, delay_ms: int = 10) -> bool:
-    """Type literal text using Wayland virtual keyboard (wtype/wlrctl)."""
+# Flag to absorb the first-event loss seen on fresh wlroots seats
+_keyboard_warmed_up: bool = False
+
+
+def _warmup_virtual_keyboard() -> None:
+    """Send a harmless Shift tap to absorb first-event loss on wlroots seats."""
+    global _keyboard_warmed_up
+    if _keyboard_warmed_up:
+        return
+
+    wtype = WTYPE_BIN or "wtype"
+    if wtype:
+        env = dict(os.environ)
+        env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+        env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+        try:
+            subprocess.run([wtype, "-M", "shift", "-m", "shift"], env=env, capture_output=True, timeout=1)
+            _keyboard_warmed_up = True
+        except Exception:
+            pass
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to Wayland clipboard using wl-copy (or xclip fallback)."""
+    env = dict(os.environ)
+    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+
+    wl_copy = WL_COPY_BIN or "wl-copy"
+    try:
+        res = subprocess.run([wl_copy], input=text.encode("utf-8"), env=env, capture_output=True, timeout=2)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), env=env, capture_output=True, timeout=2)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def is_non_ascii_or_complex(text: str) -> bool:
+    """Check whether text contains non-ASCII characters (e.g. Chinese, emojis) or newlines."""
+    return any(ord(c) >= 128 or c in "\n\r\t" for c in text)
+
+
+def type_text(
+    text: str,
+    delay_ms: int = 10,
+    method: str = "auto",
+) -> bool:
+    """Type literal text using Wayland virtual keyboard (wtype/wlrctl) or clipboard paste.
+    
+    Args:
+        text: The string to type.
+        delay_ms: Delay in ms between keystrokes when using keyboard typing emulation.
+        method: "auto" (default), "type" (keystroke emulation only), or "clipboard" (paste via Ctrl+V).
+                "auto" automatically switches to clipboard paste if text contains Chinese/Unicode,
+                newlines, or is longer than 15 characters, ensuring zero lost characters.
+    """
     if not text:
         return True
 
     env = dict(os.environ)
     env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
     env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+
+    use_clipboard = False
+    if method == "clipboard":
+        use_clipboard = True
+    elif method == "auto":
+        # Fast path for Chinese, complex unicode, or longer texts
+        if is_non_ascii_or_complex(text) or len(text) > 15:
+            use_clipboard = True
+
+    if use_clipboard:
+        if copy_to_clipboard(text):
+            time.sleep(0.02)
+            try:
+                press_key("Ctrl+V")
+                return True
+            except Exception:
+                pass
+        if method == "clipboard":
+            raise RuntimeError("Failed to inject text via clipboard paste")
+
+    _warmup_virtual_keyboard()
 
     # 1. Prefer wtype
     wtype = WTYPE_BIN or "wtype"
@@ -155,11 +240,12 @@ def type_text(text: str, delay_ms: int = 10) -> bool:
         except Exception:
             pass
 
-    raise RuntimeError("Failed to type text: no working Wayland virtual keyboard found")
+    raise RuntimeError("Failed to type text: no working Wayland virtual keyboard or clipboard found")
 
 
 def press_key(key_combo: str) -> bool:
     """Press a key or key combination (e.g. 'Ctrl+C', 'Super', 'Return')."""
+    _warmup_virtual_keyboard()
     modifiers, key = parse_key_combo(key_combo)
 
     env = dict(os.environ)

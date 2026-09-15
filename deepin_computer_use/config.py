@@ -47,6 +47,7 @@ DISPLAY = os.environ.get("DISPLAY", ":1")
 GRIM_BIN = find_executable("grim")
 WLRCTL_BIN = find_executable("wlrctl")
 WTYPE_BIN = find_executable("wtype")
+WL_COPY_BIN = find_executable("wl-copy")
 XDOTOOL_BIN = find_executable("xdotool")
 
 # Default image / screenshot constraints

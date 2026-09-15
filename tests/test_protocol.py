@@ -45,6 +45,7 @@ def test_tools_list():
     assert "press_key" in tool_names
     assert "type_text" in tool_names
     assert "mouse_click" in tool_names
+    assert "release_all_buttons" in tool_names
     assert "doctor" in tool_names
 
 
@@ -64,3 +65,20 @@ def test_doctor_call():
     assert not resp["result"]["isError"]
     content = resp["result"]["content"][0]["text"]
     assert "Deepin Computer Use Diagnostics" in content
+
+
+def test_release_all_buttons_call():
+    server = MCPServer()
+    req = {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "release_all_buttons",
+            "arguments": {},
+        },
+    }
+    resp = asyncio.run(server.handle_request(req))
+    assert resp is not None
+    assert not resp["result"]["isError"]
+    assert "Released buttons" in resp["result"]["content"][0]["text"] or "released" in resp["result"]["content"][0]["text"].lower()

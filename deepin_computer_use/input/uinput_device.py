@@ -37,13 +37,13 @@ class UInputPointer:
         abs_y = AbsInfo(value=self.current_y, min=0, max=self.height, fuzz=0, flat=0, resolution=1)
 
         cap = {
-            ecodes.EV_SYN: [ecodes.SYN_REPORT],
             ecodes.EV_KEY: [
                 ecodes.BTN_LEFT,
                 ecodes.BTN_RIGHT,
                 ecodes.BTN_MIDDLE,
                 ecodes.BTN_SIDE,
                 ecodes.BTN_EXTRA,
+                ecodes.BTN_TOUCH,
             ],
             ecodes.EV_ABS: [
                 (ecodes.ABS_X, abs_x),
@@ -61,7 +61,7 @@ class UInputPointer:
             vendor=0x1234,
             product=0x5678,
             version=1,
-            input_props=[ecodes.INPUT_PROP_DIRECT],
+            input_props=[ecodes.INPUT_PROP_POINTER],
         )
         # Give libinput time to enumerate the new device
         time.sleep(0.3)
@@ -81,12 +81,16 @@ class UInputPointer:
         """Press down a mouse button ('left', 'right', 'middle')."""
         btn_code = self._resolve_button(button)
         self.device.write(ecodes.EV_KEY, btn_code, 1)
+        if btn_code == ecodes.BTN_LEFT:
+            self.device.write(ecodes.EV_KEY, ecodes.BTN_TOUCH, 1)
         self.device.syn()
 
     def button_up(self, button: str = "left"):
         """Release a mouse button."""
         btn_code = self._resolve_button(button)
         self.device.write(ecodes.EV_KEY, btn_code, 0)
+        if btn_code == ecodes.BTN_LEFT:
+            self.device.write(ecodes.EV_KEY, ecodes.BTN_TOUCH, 0)
         self.device.syn()
 
     def click(self, button: str = "left", count: int = 1, interval_ms: int = 50):
