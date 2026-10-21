@@ -1,6 +1,7 @@
-"""Windowing and toplevel management for Deepin OS V25 (Treeland)."""
+"""Treeland window management for Deepin."""
 
 from .treeland import (
+    FocusGuard,
     close_window,
     focus_window,
     list_windows,
@@ -9,6 +10,7 @@ from .treeland import (
 )
 
 __all__ = [
+    "FocusGuard",
     "list_windows",
     "focus_window",
     "close_window",

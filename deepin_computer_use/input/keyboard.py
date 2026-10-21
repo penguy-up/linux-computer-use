@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from typing import List
+from typing import List, Optional
 
 from ..config import (
     WAYLAND_DISPLAY,
@@ -166,130 +166,154 @@ def type_text(
     text: str,
     delay_ms: int = 10,
     method: str = "auto",
+    app_name: Optional[str] = None,
+    element: Optional[str] = None,
+    restore_focus: bool = False,
 ) -> bool:
-    """Type literal text using Wayland virtual keyboard (wtype/wlrctl) or clipboard paste.
+    """Type literal text using semantic AT-SPI, Wayland virtual keyboard, or clipboard paste.
     
     Args:
         text: The string to type.
         delay_ms: Delay in ms between keystrokes when using keyboard typing emulation.
-        method: "auto" (default), "type" (keystroke emulation only), or "clipboard" (paste via Ctrl+V).
-                "auto" automatically switches to clipboard paste if text contains Chinese/Unicode,
-                newlines, or is longer than 15 characters, ensuring zero lost characters.
+        method: "auto" (default), "atspi", "type", or "clipboard".
+        app_name: Optional application name for non-disruptive AT-SPI semantic typing.
+        element: Optional accessible element selector for non-disruptive AT-SPI semantic typing.
+        restore_focus: If True, snap active window focus back to user's window after typing.
     """
     if not text:
         return True
 
-    env = dict(os.environ)
-    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
-    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-
-    use_clipboard = False
-    if method == "clipboard":
-        use_clipboard = True
-    elif method == "auto":
-        # Fast path for Chinese, complex unicode, or longer texts
-        if is_non_ascii_or_complex(text) or len(text) > 15:
-            use_clipboard = True
-
-    if use_clipboard:
-        if copy_to_clipboard(text):
-            time.sleep(0.02)
-            try:
-                press_key("Ctrl+V")
+    # 1. Semantic AT-SPI non-disruptive path
+    if app_name and element:
+        try:
+            from ..atspi.tree import set_element_value
+            if set_element_value(app_name, element, text):
                 return True
+        except Exception:
+            pass
+        if method == "atspi":
+            raise RuntimeError(f"Failed to set text via AT-SPI on element '{element}' in '{app_name}'")
+
+    from ..windowing.treeland import FocusGuard
+    with FocusGuard(restore_focus):
+        env = dict(os.environ)
+        env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+        env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+
+        use_clipboard = False
+        if method == "clipboard":
+            use_clipboard = True
+        elif method == "auto":
+            # Fast path for Chinese, complex unicode, or longer texts
+            if is_non_ascii_or_complex(text) or len(text) > 15:
+                use_clipboard = True
+
+        if use_clipboard:
+            if copy_to_clipboard(text):
+                time.sleep(0.02)
+                try:
+                    press_key("Ctrl+V")
+                    return True
+                except Exception:
+                    pass
+            if method == "clipboard":
+                raise RuntimeError("Failed to inject text via clipboard paste")
+
+        _warmup_virtual_keyboard()
+
+        # Prefer wtype
+        wtype = WTYPE_BIN or "wtype"
+        if wtype:
+            try:
+                cmd = [wtype]
+                if delay_ms > 0:
+                    cmd.extend(["-s", str(delay_ms)])
+                cmd.extend(["--", text])
+                res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
+                if res.returncode == 0:
+                    return True
             except Exception:
                 pass
-        if method == "clipboard":
-            raise RuntimeError("Failed to inject text via clipboard paste")
 
-    _warmup_virtual_keyboard()
+        # Fallback: wlrctl keyboard type
+        wlrctl = WLRCTL_BIN or "wlrctl"
+        if wlrctl:
+            try:
+                cmd = [wlrctl, "keyboard", "type", text]
+                res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
 
-    # 1. Prefer wtype
-    wtype = WTYPE_BIN or "wtype"
-    if wtype:
-        try:
+        # Fallback: xdotool type (for XWayland active windows)
+        xdotool = XDOTOOL_BIN or "xdotool"
+        if xdotool:
+            try:
+                cmd = [xdotool, "type", "--delay", str(delay_ms), text]
+                res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+    raise RuntimeError("Failed to type text: no working Wayland virtual keyboard, AT-SPI, or clipboard found")
+
+
+def press_key(key_combo: str, restore_focus: bool = False) -> bool:
+    """Press a key or key combination (e.g. 'Ctrl+C', 'Super', 'Return').
+    
+    Args:
+        key_combo: The key combination string.
+        restore_focus: If True, snap window focus back to user's active window after key press.
+    """
+    from ..windowing.treeland import FocusGuard
+
+    with FocusGuard(restore_focus):
+        _warmup_virtual_keyboard()
+        modifiers, key = parse_key_combo(key_combo)
+
+        env = dict(os.environ)
+        env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+        env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+
+        # Prefer wtype with modifier flags
+        wtype = WTYPE_BIN or "wtype"
+        if wtype:
             cmd = [wtype]
-            if delay_ms > 0:
-                cmd.extend(["-s", str(delay_ms)])
-            cmd.extend(["--", text])
-            res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    # 2. Fallback: wlrctl keyboard type
-    wlrctl = WLRCTL_BIN or "wlrctl"
-    if wlrctl:
-        try:
-            cmd = [wlrctl, "keyboard", "type", text]
-            res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    # 3. Fallback: xdotool type (for XWayland active windows)
-    xdotool = XDOTOOL_BIN or "xdotool"
-    if xdotool:
-        try:
-            cmd = [xdotool, "type", "--delay", str(delay_ms), text]
-            res = subprocess.run(cmd, env=env, capture_output=True, timeout=10)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    raise RuntimeError("Failed to type text: no working Wayland virtual keyboard or clipboard found")
-
-
-def press_key(key_combo: str) -> bool:
-    """Press a key or key combination (e.g. 'Ctrl+C', 'Super', 'Return')."""
-    _warmup_virtual_keyboard()
-    modifiers, key = parse_key_combo(key_combo)
-
-    env = dict(os.environ)
-    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
-    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
-
-    # 1. Prefer wtype with modifier flags
-    wtype = WTYPE_BIN or "wtype"
-    if wtype:
-        cmd = [wtype]
-        for m in modifiers:
-            cmd.extend(["-M", m])
-        if key:
-            cmd.extend(["-k", key])
-        for m in reversed(modifiers):
-            cmd.extend(["-m", m])
-
-        try:
-            res = subprocess.run(cmd, env=env, capture_output=True, timeout=5)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
-
-    # 2. Fallback: xdotool key
-    xdotool = XDOTOOL_BIN or "xdotool"
-    if xdotool:
-        try:
-            # Map back to xdotool syntax
-            x_mods = []
             for m in modifiers:
-                if m == "logo":
-                    x_mods.append("Super")
-                elif m == "ctrl":
-                    x_mods.append("ctrl")
-                elif m == "alt":
-                    x_mods.append("alt")
-                elif m == "shift":
-                    x_mods.append("shift")
-            chord = "+".join(x_mods + [key]) if x_mods else key
-            res = subprocess.run([xdotool, "key", chord], env=env, capture_output=True, timeout=5)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
+                cmd.extend(["-M", m])
+            if key:
+                cmd.extend(["-k", key])
+            for m in reversed(modifiers):
+                cmd.extend(["-m", m])
+
+            try:
+                res = subprocess.run(cmd, env=env, capture_output=True, timeout=5)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        # Fallback: xdotool key
+        xdotool = XDOTOOL_BIN or "xdotool"
+        if xdotool:
+            try:
+                x_mods = []
+                for m in modifiers:
+                    if m == "logo":
+                        x_mods.append("Super")
+                    elif m == "ctrl":
+                        x_mods.append("ctrl")
+                    elif m == "alt":
+                        x_mods.append("alt")
+                    elif m == "shift":
+                        x_mods.append("shift")
+                chord = "+".join(x_mods + [key]) if x_mods else key
+                res = subprocess.run([xdotool, "key", chord], env=env, capture_output=True, timeout=5)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
 
     raise RuntimeError(f"Failed to press key combination: {key_combo}")

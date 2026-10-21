@@ -17,6 +17,35 @@ _last_cursor_y: int = 500
 _held_buttons: set[str] = set()
 
 
+class CursorGuard:
+    """Context manager to preserve and restore user cursor position around automated actions.
+    
+    When enabled, records the current physical cursor location before an action (click,
+    drag, etc.) and restores it immediately upon exit, preventing disruption to the user.
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self.orig_x: Optional[int] = None
+        self.orig_y: Optional[int] = None
+
+    def __enter__(self):
+        if self.enabled:
+            try:
+                self.orig_x, self.orig_y = get_cursor_position()
+            except Exception:
+                pass
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.enabled and self.orig_x is not None and self.orig_y is not None:
+            try:
+                time.sleep(0.01)
+                mouse_move(self.orig_x, self.orig_y)
+            except Exception:
+                pass
+
+
 def get_held_buttons() -> set[str]:
     """Return a copy of currently held mouse buttons."""
     return set(_held_buttons)
@@ -139,42 +168,52 @@ def mouse_click(
     y: Optional[int] = None,
     button: str = "left",
     count: int = 1,
+    restore_cursor: bool = False,
 ) -> bool:
-    """Move (optionally) and click the mouse button."""
-    if x is not None and y is not None:
-        mouse_move(x, y)
-        time.sleep(0.05)
+    """Move (optionally) and click the mouse button.
+    
+    Args:
+        x: Optional target X coordinate.
+        y: Optional target Y coordinate.
+        button: Mouse button ('left', 'right', 'middle').
+        count: Number of clicks (1 for single, 2 for double, 3 for triple).
+        restore_cursor: If True, snap cursor back to original position after clicking (Cursor Guard).
+    """
+    with CursorGuard(restore_cursor):
+        if x is not None and y is not None:
+            mouse_move(x, y)
+            time.sleep(0.05)
 
-    ptr = get_uinput_pointer()
-    if ptr:
-        try:
-            ptr.click(button=button, count=count)
-            return True
-        except Exception:
-            pass
-
-    # Try ydotool click
-    ydotool_sock = os.environ.get("YDOTOOL_SOCKET", "/tmp/.ydotool_socket")
-    if os.path.exists(ydotool_sock):
-        btn_hex = "0x110" if button == "left" else "0x111" if button == "right" else "0x112"
-        try:
-            res = subprocess.run(["ydotool", "click", "--repeat", str(count), btn_hex], capture_output=True, timeout=2)
-            if res.returncode == 0:
+        ptr = get_uinput_pointer()
+        if ptr:
+            try:
+                ptr.click(button=button, count=count)
                 return True
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-    # Fallback to xdotool
-    if XDOTOOL_BIN:
-        btn_num = "1" if button == "left" else "3" if button == "right" else "2"
-        try:
-            res = subprocess.run([XDOTOOL_BIN, "click", "--repeat", str(count), btn_num], capture_output=True, timeout=2)
-            if res.returncode == 0:
-                return True
-        except Exception:
-            pass
+        # Try ydotool click
+        ydotool_sock = os.environ.get("YDOTOOL_SOCKET", "/tmp/.ydotool_socket")
+        if os.path.exists(ydotool_sock):
+            btn_hex = "0x110" if button == "left" else "0x111" if button == "right" else "0x112"
+            try:
+                res = subprocess.run(["ydotool", "click", "--repeat", str(count), btn_hex], capture_output=True, timeout=2)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
 
-    raise RuntimeError(f"Failed to click mouse button '{button}': no working mouse injection backend available")
+        # Fallback to xdotool
+        if XDOTOOL_BIN:
+            btn_num = "1" if button == "left" else "3" if button == "right" else "2"
+            try:
+                res = subprocess.run([XDOTOOL_BIN, "click", "--repeat", str(count), btn_num], capture_output=True, timeout=2)
+                if res.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+        raise RuntimeError(f"Failed to click mouse button '{button}': no working mouse injection backend available")
 
 
 def mouse_drag(
@@ -185,22 +224,35 @@ def mouse_drag(
     button: str = "left",
     steps: int = 10,
     delay_ms: int = 20,
+    restore_cursor: bool = False,
 ) -> bool:
-    """Drag from (start_x, start_y) to (end_x, end_y)."""
-    mouse_move(start_x, start_y)
-    time.sleep(0.05)
-    mouse_down(button)
-    time.sleep(0.05)
+    """Drag from (start_x, start_y) to (end_x, end_y).
+    
+    Args:
+        start_x: Drag start X coordinate.
+        start_y: Drag start Y coordinate.
+        end_x: Drag destination X coordinate.
+        end_y: Drag destination Y coordinate.
+        button: Mouse button to hold during drag.
+        steps: Number of intermediate interpolation steps.
+        delay_ms: Milliseconds delay between steps.
+        restore_cursor: If True, snap cursor back to start coordinate after drag completes.
+    """
+    with CursorGuard(restore_cursor):
+        mouse_move(start_x, start_y)
+        time.sleep(0.05)
+        mouse_down(button)
+        time.sleep(0.05)
 
-    for i in range(1, steps + 1):
-        cur_x = int(start_x + (end_x - start_x) * (i / float(steps)))
-        cur_y = int(start_y + (end_y - start_y) * (i / float(steps)))
-        mouse_move(cur_x, cur_y)
-        time.sleep(delay_ms / 1000.0)
+        for i in range(1, steps + 1):
+            cur_x = int(start_x + (end_x - start_x) * (i / float(steps)))
+            cur_y = int(start_y + (end_y - start_y) * (i / float(steps)))
+            mouse_move(cur_x, cur_y)
+            time.sleep(delay_ms / 1000.0)
 
-    time.sleep(0.05)
-    mouse_up(button)
-    return True
+        time.sleep(0.05)
+        mouse_up(button)
+        return True
 
 
 def mouse_scroll(direction: str = "down", amount: int = 2) -> bool:
@@ -232,8 +284,10 @@ def mouse_scroll(direction: str = "down", amount: int = 2) -> bool:
 
 def get_cursor_position() -> Tuple[int, int]:
     """Return the current cursor coordinate (x, y)."""
-    # If xdotool can get it, query xdotool
-    if XDOTOOL_BIN:
+    # In Wayland environments driven via uinput, _last_cursor_x/_last_cursor_y is the
+    # authoritative tracked absolute position, as xdotool on XWayland only reports
+    # locations when the cursor intersects an XWayland window.
+    if not os.environ.get("WAYLAND_DISPLAY") and XDOTOOL_BIN:
         try:
             res = subprocess.run([XDOTOOL_BIN, "getmouselocation"], capture_output=True, text=True, timeout=1)
             if res.returncode == 0:

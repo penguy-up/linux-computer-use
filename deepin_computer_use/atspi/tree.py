@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import gi
@@ -36,7 +36,47 @@ def list_accessible_apps() -> List[Dict[str, Any]]:
     return apps
 
 
-def _node_to_dict(accessible: Any, current_depth: int, max_depth: int, node_counter: List[int], max_nodes: int) -> Optional[Dict[str, Any]]:
+def get_active_window() -> Tuple[Optional[str], Optional[str]]:
+    """Return the name of the currently active/focused application and window title.
+    
+    Returns:
+        (app_name, window_title) or (None, None) if undetectable.
+    """
+    if not HAVE_ATSPI:
+        return None, None
+
+    try:
+        desktop = Atspi.get_desktop(0)
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            if not app:
+                continue
+            app_name = app.get_name() or ""
+            for j in range(app.get_child_count()):
+                win = app.get_child_at_index(j)
+                if not win:
+                    continue
+                try:
+                    state_set = win.get_state_set()
+                    if state_set and (
+                        state_set.contains(Atspi.StateType.ACTIVE)
+                        or state_set.contains(Atspi.StateType.FOCUSED)
+                    ):
+                        return app_name, win.get_name() or ""
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return None, None
+
+
+def _node_to_dict(
+    accessible: Any,
+    current_depth: int,
+    max_depth: int,
+    node_counter: List[int],
+    max_nodes: int,
+) -> Optional[Dict[str, Any]]:
     """Recursively convert AtspiAccessible into clean JSON-serializable dict."""
     if node_counter[0] >= max_nodes:
         return None
@@ -80,10 +120,10 @@ def _node_to_dict(accessible: Any, current_depth: int, max_depth: int, node_coun
     try:
         state_set = accessible.get_state_set()
         if state_set:
-            states_str = state_set.get_states()
             # Common useful states
-            for s in ("focused", "visible", "showing", "enabled", "focusable", "checked", "selectable"):
-                if state_set.contains(getattr(Atspi.StateType, s.upper(), None)):
+            for s in ("focused", "visible", "showing", "enabled", "focusable", "checked", "selectable", "active"):
+                state_enum = getattr(Atspi.StateType, s.upper(), None)
+                if state_enum is not None and state_set.contains(state_enum):
                     states.append(s)
     except Exception:
         pass
@@ -158,17 +198,50 @@ def get_accessibility_tree(
     }
 
 
-def _find_node_by_id_or_name(accessible: Any, selector: str | int) -> Optional[Any]:
-    """Helper to locate an AtspiAccessible by index, id, or name."""
-    if isinstance(selector, str) and (accessible.get_name() or "").lower() == selector.lower():
+def _find_node_by_selector(accessible: Any, selector: str | int, counter: Optional[List[int]] = None) -> Optional[Any]:
+    """Locate an AtspiAccessible by node ID, element name, role, or description."""
+    if counter is None:
+        counter = [0]
+    counter[0] += 1
+    current_id = counter[0]
+
+    # 1. Match by numeric node ID
+    target_id: Optional[int] = None
+    if isinstance(selector, int):
+        target_id = selector
+    elif isinstance(selector, str) and selector.isdigit():
+        target_id = int(selector)
+
+    if target_id is not None and current_id == target_id:
         return accessible
 
+    # 2. Match by name or role string
+    if isinstance(selector, str) and target_id is None:
+        sel_lower = selector.strip().lower()
+        node_name = (accessible.get_name() or "").lower()
+        node_role = (accessible.get_role_name() or "").lower()
+        node_desc = (accessible.get_description() or "").lower()
+
+        # Exact match
+        if sel_lower in (node_name, node_role, node_desc):
+            return accessible
+
+        # Prefix "role:" match e.g. "role:push button"
+        if sel_lower.startswith("role:") and node_role == sel_lower[5:].strip():
+            return accessible
+
+        # Substring match in name
+        if node_name and sel_lower in node_name:
+            return accessible
+
+    # Recursively check children
     for i in range(accessible.get_child_count()):
         child = accessible.get_child_at_index(i)
         if child:
-            found = _find_node_by_id_or_name(child, selector)
+            found = _find_node_by_selector(child, selector, counter)
             if found:
                 return found
+
     return None
 
 
@@ -177,7 +250,11 @@ def perform_accessibility_action(
     element_selector: str,
     action_name: Optional[str] = None,
 ) -> bool:
-    """Perform accessibility action (e.g. click, press, toggle) on a named element."""
+    """Perform accessibility action (e.g. click, press, toggle) on a named element.
+    
+    This is completely non-disruptive: it communicates directly via D-Bus and does NOT
+    move the physical mouse cursor or steal input focus.
+    """
     if not HAVE_ATSPI:
         return False
 
@@ -192,7 +269,7 @@ def perform_accessibility_action(
     if not target_app:
         return False
 
-    node = _find_node_by_id_or_name(target_app, element_selector)
+    node = _find_node_by_selector(target_app, element_selector)
     if not node:
         return False
 
@@ -209,9 +286,9 @@ def perform_accessibility_action(
         if action_name:
             for a_idx in range(n_actions):
                 if action_name.lower() in act.get_action_name(a_idx).lower():
-                    return act.do_action(a_idx)
+                    return bool(act.do_action(a_idx))
         # Default to primary action (index 0)
-        return act.do_action(0)
+        return bool(act.do_action(0))
     except Exception:
         return False
 
@@ -221,7 +298,12 @@ def set_element_value(
     element_selector: str,
     value: str,
 ) -> bool:
-    """Set text value or numeric value on accessible element."""
+    """Set text value or numeric value on accessible element directly via AT-SPI.
+    
+    This is non-disruptive: it writes text directly to the accessible text widget
+    without activating the window, without typing via virtual keyboard, and without
+    hijacking user keyboard focus.
+    """
     if not HAVE_ATSPI:
         return False
 
@@ -236,20 +318,32 @@ def set_element_value(
     if not target_app:
         return False
 
-    node = _find_node_by_id_or_name(target_app, element_selector)
+    node = _find_node_by_selector(target_app, element_selector)
     if not node:
         return False
 
-    # Try editable text first
+    # 1. Try editable text interface
     try:
         txt = node.get_editable_text_iface()
         if txt:
-            txt.set_text_contents(value)
-            return True
+            try:
+                res = txt.set_text_contents(value)
+                if res or res is None:
+                    return True
+            except Exception:
+                pass
+
+            # Alternative: delete existing text and insert
+            try:
+                txt.delete_text(0, -1)
+                res = txt.insert_text(0, value, len(value))
+                return bool(res or res is None)
+            except Exception:
+                pass
     except Exception:
         pass
 
-    # Try value interface
+    # 2. Try numeric/range value interface
     try:
         val = node.get_value_iface()
         if val:

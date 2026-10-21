@@ -10,6 +10,37 @@ from ..config import WAYLAND_DISPLAY, WLRCTL_BIN, XDG_RUNTIME_DIR
 from .dde_dock import activate_dock_app
 
 
+class FocusGuard:
+    """Context manager to preserve and restore user active window focus around automated actions.
+    
+    When enabled, records which application/window is currently focused before executing an
+    action, and automatically re-focuses it upon exit.
+    """
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        self.orig_app: Optional[str] = None
+        self.orig_win: Optional[str] = None
+
+    def __enter__(self):
+        if self.enabled:
+            try:
+                from ..atspi.tree import get_active_window
+                self.orig_app, self.orig_win = get_active_window()
+            except Exception:
+                pass
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.enabled and (self.orig_app or self.orig_win):
+            try:
+                target = self.orig_app or self.orig_win
+                if target:
+                    focus_window(target)
+            except Exception:
+                pass
+
+
 def list_windows() -> List[Dict[str, Any]]:
     """List all toplevel windows on Treeland compositor."""
     windows: List[Dict[str, Any]] = []

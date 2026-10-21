@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepin-computer-use"
-version = "1.0.0"
+version = "1.1.0"
 description = "Computer Use MCP Server tailored for Deepin OS V25 (Treeland Wayland compositor)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,3 +35,7 @@ deepin-computer-use = "deepin_computer_use.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["deepin_computer_use*"]
+
+[tool.pytest.ini_options]
+addopts = "-p no:superclaude"
+testpaths = ["tests"]
